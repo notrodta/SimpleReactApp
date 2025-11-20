@@ -1,69 +1,366 @@
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+// App.tsx
+import React from "react";
+import { create } from "zustand";
 
-## Available Scripts
+// =======================
+// Domain Types
+// =======================
 
-In the project directory, you can run:
+export type Todo = {
+  id: string;
+  title: string;
+  completed: boolean;
+};
 
-### `npm start`
+export type OverviewStats = {
+  totalTodos: number;
+  completedTodos: number;
+};
 
-Runs the app in the development mode.<br>
-Open [http://localhost:3000](http://localhost:3000) to view it in the browser.
+// =======================
+// Apollo Codegen Hooks
+// (Adjust import path & hook names to your project)
+// =======================
+import {
+  useGetTodosQuery,
+  useToggleTodoMutation,
+  useGetOverviewQuery,
+} from "./__generated__/graphql";
 
-The page will reload if you make edits.<br>
-You will also see any lint errors in the console.
+// =======================
+// ZUSTAND STORE
+// Shared todos + loading + error
+// =======================
 
-### `npm test`
+type TodoState = {
+  todos: Todo[];
+  loading: boolean;
+  error?: string;
 
-Launches the test runner in the interactive watch mode.<br>
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+  setTodos: (todos: Todo[]) => void;
+  setLoading: (loading: boolean) => void;
+  setError: (err?: string) => void;
+  updateTodo: (todo: Todo) => void;
+};
 
-### `npm run build`
+export const useTodoStore = create<TodoState>((set) => ({
+  todos: [],
+  loading: false,
+  error: undefined,
 
-Builds the app for production to the `build` folder.<br>
-It correctly bundles React in production mode and optimizes the build for the best performance.
+  setTodos(todos) {
+    set({ todos });
+  },
 
-The build is minified and the filenames include the hashes.<br>
-Your app is ready to be deployed!
+  setLoading(loading) {
+    set({ loading });
+  },
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+  setError(error) {
+    set({ error });
+  },
 
-### `npm run eject`
+  updateTodo(todo) {
+    set((state) => ({
+      todos: state.todos.map((t) =>
+        t.id === todo.id ? todo : t
+      ),
+    }));
+  },
+}));
 
-**Note: this is a one-way operation. Once you `eject`, you can’t go back!**
+// =======================
+// SERVICE: TODOS (Apollo + Zustand)
+// =======================
 
-If you aren’t satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
+export type TodoService = {
+  todos: Todo[];
+  loading: boolean;
+  error?: string;
+  loadTodos: () => Promise<void>;
+  toggleTodo: (id: string) => Promise<void>;
+};
 
-Instead, it will copy all the configuration files and the transitive dependencies (Webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you’re on your own.
+export function useTodoService(): TodoService {
+  // ---- Apollo hooks ----
+  const {
+    data,
+    loading: apolloLoading,
+    error: apolloError,
+    refetch,
+  } = useGetTodosQuery({
+    notifyOnNetworkStatusChange: true,
+  });
 
-You don’t have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn’t feel obligated to use this feature. However we understand that this tool wouldn’t be useful if you couldn’t customize it when you are ready for it.
+  const [toggleTodoMutation] = useToggleTodoMutation();
 
-## Learn More
+  // ---- Zustand mutators (each selected separately) ----
+  const setTodos = useTodoStore((s) => s.setTodos);
+  const setLoading = useTodoStore((s) => s.setLoading);
+  const setError = useTodoStore((s) => s.setError);
+  const updateTodo = useTodoStore((s) => s.updateTodo);
 
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
+  // Sync Apollo → Zustand: todos
+  React.useEffect(() => {
+    if (data?.todos) {
+      setTodos(
+        data.todos.map((t) => ({
+          id: t.id,
+          title: t.title,
+          completed: t.completed,
+        }))
+      );
+    }
+  }, [data, setTodos]);
 
-To learn React, check out the [React documentation](https://reactjs.org/).
+  // Sync Apollo → Zustand: loading
+  React.useEffect(() => {
+    setLoading(apolloLoading);
+  }, [apolloLoading, setLoading]);
 
-### Code Splitting
+  // Sync Apollo → Zustand: error
+  React.useEffect(() => {
+    setError(apolloError ? apolloError.message : undefined);
+  }, [apolloError, setError]);
 
-This section has moved here: https://facebook.github.io/create-react-app/docs/code-splitting
+  // ---- UI-facing state (each selected separately) ----
+  const todos = useTodoStore((s) => s.todos);
+  const loading = useTodoStore((s) => s.loading);
+  const error = useTodoStore((s) => s.error);
 
-### Analyzing the Bundle Size
+  async function loadTodos() {
+    await refetch();
+  }
 
-This section has moved here: https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size
+  async function toggleTodo(id: string) {
+    const res = await toggleTodoMutation({ variables: { id } });
 
-### Making a Progressive Web App
+    const updated = res.data?.toggleTodo;
+    if (updated) {
+      updateTodo({
+        id: updated.id,
+        title: updated.title,
+        completed: updated.completed,
+      });
+    }
+  }
 
-This section has moved here: https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app
+  return {
+    todos,
+    loading,
+    error,
+    loadTodos,
+    toggleTodo,
+  };
+}
 
-### Advanced Configuration
+// =======================
+// SERVICE: OVERVIEW (Apollo only, no Zustand)
+// =======================
 
-This section has moved here: https://facebook.github.io/create-react-app/docs/advanced-configuration
+export type OverviewService = {
+  stats?: OverviewStats;
+  loading: boolean;
+  error?: string;
+  reload: () => Promise<void>;
+};
 
-### Deployment
+export function useOverviewService(): OverviewService {
+  const { data, loading, error, refetch } = useGetOverviewQuery();
 
-This section has moved here: https://facebook.github.io/create-react-app/docs/deployment
+  const stats: OverviewStats | undefined = data?.overview
+    ? {
+        totalTodos: data.overview.totalTodos,
+        completedTodos: data.overview.completedTodos,
+      }
+    : undefined;
 
-### `npm run build` fails to minify
+  async function reload() {
+    await refetch();
+  }
 
-This section has moved here: https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify
-# SimpleReactApp
+  return {
+    stats,
+    loading,
+    error: error?.message,
+    reload,
+  };
+}
+
+// =======================
+// PURE UI COMPONENTS
+// =======================
+
+export type TodosViewProps = {
+  todos: Todo[];
+  loading: boolean;
+  error?: string;
+  onToggle(id: string): void;
+  onReload(): void;
+};
+
+export function TodosView({
+  todos,
+  loading,
+  error,
+  onToggle,
+  onReload,
+}: TodosViewProps) {
+  return (
+    <section style={{ padding: 16, maxWidth: 400 }}>
+      <h2>Todos</h2>
+
+      <button onClick={onReload} disabled={loading}>
+        {loading ? "Loading..." : "Reload"}
+      </button>
+
+      {error && <p style={{ color: "red" }}>{error}</p>}
+
+      {todos.length === 0 && !loading && <p>No todos yet.</p>}
+
+      <ul style={{ listStyle: "none", padding: 0 }}>
+        {todos.map((t) => (
+          <li key={t.id}>
+            <label>
+              <input
+                type="checkbox"
+                checked={t.completed}
+                onChange={() => onToggle(t.id)}
+              />
+              <span
+                style={{
+                  marginLeft: 8,
+                  textDecoration: t.completed ? "line-through" : "none",
+                }}
+              >
+                {t.title}
+              </span>
+            </label>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+export type OverviewViewProps = {
+  stats?: OverviewStats;
+  loading: boolean;
+  error?: string;
+  onReload(): void;
+};
+
+export function OverviewView({
+  stats,
+  loading,
+  error,
+  onReload,
+}: OverviewViewProps) {
+  return (
+    <section style={{ padding: 16, maxWidth: 300 }}>
+      <h2>Overview</h2>
+
+      <button onClick={onReload} disabled={loading}>
+        {loading ? "Loading..." : "Reload"}
+      </button>
+
+      {error && <p style={{ color: "red" }}>{error}</p>}
+      {loading && <p>Loading...</p>}
+
+      {!loading && !error && !stats && <p>No overview data.</p>}
+
+      {stats && !loading && !error && (
+        <ul style={{ listStyle: "none", padding: 0 }}>
+          <li>Total todos: {stats.totalTodos}</li>
+          <li>Completed todos: {stats.completedTodos}</li>
+        </ul>
+      )}
+    </section>
+  );
+}
+
+// =======================
+// CONNECTED COMPONENTS
+// =======================
+
+export function TodosConnected() {
+  const { todos, loading, error, loadTodos, toggleTodo } = useTodoService();
+
+  return (
+    <TodosView
+      todos={todos}
+      loading={loading}
+      error={error}
+      onToggle={toggleTodo}
+      onReload={loadTodos}
+    />
+  );
+}
+
+export function OverviewConnected() {
+  const { stats, loading, error, reload } = useOverviewService();
+
+  return (
+    <OverviewView
+      stats={stats}
+      loading={loading}
+      error={error}
+      onReload={reload}
+    />
+  );
+}
+
+// =======================
+// DASHBOARD
+// =======================
+
+export function DashboardConnected() {
+  return (
+    <div style={{ padding: 16 }}>
+      <h1>Dashboard</h1>
+      <div style={{ display: "flex", gap: 24 }}>
+        <TodosConnected />
+        <OverviewConnected />
+      </div>
+    </div>
+  );
+}
+
+// =======================
+// APP ROOT
+// =======================
+
+export default function App() {
+  return <DashboardConnected />;
+}
+
+S – Single Responsibility
+
+useTodoStore → manages todo client state only.
+
+useTodoService → coordinates Apollo + Zustand + domain mapping.
+
+TodosView / OverviewView → render-only UI.
+
+TodosConnected / OverviewConnected / DashboardConnected → wiring/layout.
+Each piece has one clear reason to change.
+
+O – Open/Closed
+
+You can add new features (e.g. “archive todo”, extra fields on Todo, new views) by extending services, store, or adding new connected/pure components without changing existing UI contracts (TodosViewProps, OverviewViewProps, TodoService shape).
+
+L – Liskov Substitution
+
+Anything that pretends to be a TodoService or OverviewService (mock, different backend, React Query instead of Apollo, etc.) can be swapped in and the connected components still work, as long as they return the same shape.
+
+I – Interface Segregation
+
+UI only gets what it needs: TodosView doesn’t know about Apollo, Zustand, or mutators; it just gets todos, loading, error, and callbacks. Same for OverviewView. No “fat interface” leaking infra concerns into the UI.
+
+D – Dependency Inversion
+
+React components depend on abstract service shapes (useTodoService, useOverviewService) and props contracts, not on the concrete data layer (Apollo, Zustand, GraphQL documents).
+
+If you rewired useTodoService to REST, React Query, or mocked data, the UI wouldn’t need to change.
+
+So yes: even without use
