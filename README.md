@@ -1,4 +1,4 @@
-
+```
 // App.tsx
 import React from "react";
 import { create } from "zustand";
@@ -419,3 +419,4 @@ export function DashboardConnected() {
 export default function App() {
   return <DashboardConnected />;
 }
+```
