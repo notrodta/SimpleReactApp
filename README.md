@@ -1,131 +1,100 @@
-# RFC: Smart/Dumb Component Architecture Pattern
+# Unit Testing with Mock Data Factories
 
-**Status:** Proposed  
-**Date:** December 25, 2025  
-**Author:** Engineering Team
+## Mock Data Factory
+
+```tsx
+// tests/factories/companyPickerFactory.ts
+import { vi } from 'vitest';
+import type { CompanyPickerContext } from '../../CompanyPicker';
+
+export const createMockContext = (
+  overrides?: Partial<CompanyPickerContext>
+): CompanyPickerContext => ({
+  autocomplete: {
+    value: '',
+    suggestions: [],
+    onChange: vi.fn(),
+    onSelect: vi.fn(),
+    loading: false,
+    ...overrides?.autocomplete,
+  },
+  selectedList: {
+    items: [],
+    onRemove: vi.fn(),
+    ...overrides?.selectedList,
+  },
+  footer: {
+    selectedCount: 0,
+    onClear: vi.fn(),
+    onConfirm: vi.fn(),
+    ...overrides?.footer,
+  },
+});
+```
 
 ---
 
-## Summary
-
-This RFC proposes a standardized architecture pattern for complex React components that separates business logic from presentation using a "Smart/Dumb" component structure with Context-based prop distribution.
-
-## Motivation
-
-As React components grow in complexity, we face common challenges:
-
-- **Prop drilling** through multiple levels of component hierarchy
-- **Tight coupling** between business logic and UI rendering
-- **Difficult testing** when logic and presentation are intertwined
-- **Poor reusability** of UI components across different contexts
-- **Unclear separation of concerns** leading to maintenance issues
-
-This pattern addresses these issues by creating a clear contract between data/behavior (Smart) and presentation (Dumb).
-
-## Detailed Design
-
-### Architecture Overview
-
-The pattern consists of three main layers:
-
-Example component: CompanyPicker
-
-```
-┌─────────────────────────────────────┐
-│   Smart Component (CompanyPicker)    │
-│  - State Management                 │
-│  - Business Logic                   │
-│  - Child-specific Hooks             │
-│  - Connects to CompanyPickerView     │
-│    (Single point of entry)          │
-└──────────────┬──────────────────────┘
-               │ context prop
-               ▼
-┌─────────────────────────────────────┐
-│  Context Provider (CompanyPickerCtx) │
-│  - Props Distribution Bus           │
-└──────────────┬──────────────────────┘
-               │ provides context
-               ▼
-┌─────────────────────────────────────┐
-│ Dumb Component (CompanyPickerView)   │
-│  - Pure Presentation                │
-│  - No Business Logic                │
-│                                     │
-│  Contains Child Components:         │
-│  ┌───────────────────────────────┐ │
-│  │ <Autocomplete />              │ │
-│  │   ↑ consumes autocomplete     │ │
-│  │     props from context        │ │
-│  └───────────────────────────────┘ │
-│  ┌───────────────────────────────┐ │
-│  │ <List />                      │ │
-│  │   ↑ consumes selectedList     │ │
-│  │     props from context        │ │
-│  └───────────────────────────────┘ │
-│  ┌───────────────────────────────┐ │
-│  │ <Footer />                    │ │
-│  │   ↑ consumes footer           │ │
-│  │     props from context        │ │
-│  └───────────────────────────────┘ │
-└─────────────────────────────────────┘
-```
-
+## Test Example
 
 ```tsx
+// CompanyPickerView.test.tsx
+import { describe, it, expect, vi } from 'vitest';
+import { render, screen } from '@testing-library/react';
+import { CompanyPickerView } from './CompanyPicker';
+import { createMockContext } from './factories/companyPickerFactory';
 
+describe('CompanyPickerView', () => {
+  it('should handle empty state', () => {
+    // Uses all defaults - no setup needed!
+    const mockContext = createMockContext();
+    
+    render(<CompanyPickerView context={mockContext} />);
+    
+    expect(screen.getByText('0 selected')).toBeInTheDocument();
+  });
 
-/* ======================================================
-    CompanyPickerView context (prop-bus)
-   ====================================================== */
-type CompanyPickerContext = {
-  autocomplete: AutocompleteProps;
-  selectedList: SelectedListProps;
-  footer: FooterProps;
-};
+  it('should render with selected companies', () => {
+    // Easy to create mock with only what we care about
+    const mockContext = createMockContext({
+      selectedList: {
+        items: [
+          { id: '1', name: 'Company A' },
+          { id: '2', name: 'Company B' },
+        ],
+      },
+      footer: { selectedCount: 2 },
+    });
+    
+    render(<CompanyPickerView context={mockContext} />);
+    
+    expect(screen.getByText('Company A')).toBeInTheDocument();
+    expect(screen.getByText('Company B')).toBeInTheDocument();
+    expect(screen.getByText('2 selected')).toBeInTheDocument();
+  });
 
-const CompanyPickerCtx = React.createContext<CompanyPickerContext | null>(null);
+});
 
-/* ======================================================
-    CompanyPickerView - Single Point of entry
-   ====================================================== */
-function CompanyPickerView({ context }: { context: CompanyPickerContext }) {
-  return (
-    <CompanyPickerCtx.Provider value={context}>
-      {/* Child components consume context to avoid prop drilling */}
-      <div>
-        <Autocomplete />
+describe('List Component', () => {
+  it('should render selected items from context', () => {
+    const mockContext = createMockContext({
+      selectedList: {
+        items: [
+          { id: '1', name: 'Company A' },
+          { id: '2', name: 'Company B' },
+        ],
+      },
+    });
+
+    render(
+      <CompanyPickerCtx.Provider value={mockContext}>
         <List />
-        <Footer />
-      </div>
-    </CompanyPickerCtx.Provider>
-  );
-}
+      </CompanyPickerCtx.Provider>
+    );
 
-
-/* ======================================================
-   7) Smart Component wires everything
-   ====================================================== */
-export function CompanyPicker() {
-  const state = useCompanyPickerState(); //Shared States
-
-  // Child specific hooks
-  const autocomplete = useAutocomplete(state, suggestions, loading);
-  const selectedList = useSelectedList(state);
-  const footer = useFooter(state);
-
-// Memoize context to prevent unnecessary re-renders of CompanyPickerView
-  const context = React.useMemo<CompanyPickerContext>(
-    () => ({
-      autocomplete,
-      selectedList,
-      footer,
-    }),
-    [autocomplete, selectedList, footer]
-  );
-
-  return <CompanyPickerView context={context} />;
-}
-
-
+    expect(screen.getByText('Company A')).toBeInTheDocument();
+    expect(screen.getByText('Company B')).toBeInTheDocument();
+  });
+});
 ```
+
+
