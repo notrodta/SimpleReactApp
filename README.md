@@ -1,219 +1,131 @@
-✅ 1. Example GraphQL Query Types (from Codegen)
----------------------------------------------------------
+# RFC: Smart/Dumb Component Architecture Pattern
+
+**Status:** Proposed  
+**Date:** December 25, 2025  
+**Author:** Engineering Team
+
+---
+
+## Summary
+
+This RFC proposes a standardized architecture pattern for complex React components that separates business logic from presentation using a "Smart/Dumb" component structure with Context-based prop distribution.
+
+## Motivation
+
+As React components grow in complexity, we face common challenges:
+
+- **Prop drilling** through multiple levels of component hierarchy
+- **Tight coupling** between business logic and UI rendering
+- **Difficult testing** when logic and presentation are intertwined
+- **Poor reusability** of UI components across different contexts
+- **Unclear separation of concerns** leading to maintenance issues
+
+This pattern addresses these issues by creating a clear contract between data/behavior (Smart) and presentation (Dumb).
+
+## Detailed Design
+
+### Architecture Overview
+
+The pattern consists of three main layers:
+
+Example component: CompanyPicker
+
 ```
-GetTodosQuery
-export type GetTodosQuery = {
-  todos: {
-    id: string;
-    title: string;
-    completed: boolean;
-    __typename: "Todo";
-    metadata?: {
-      priority?: "low" | "medium" | "high";
-      tags?: string[];
-    } | null;
-  }[];
+┌─────────────────────────────────────┐
+│   Smart Component (CompanyPicker)    │
+│  - State Management                 │
+│  - Business Logic                   │
+│  - Child-specific Hooks             │
+│  - Connects to CompanyPickerView     │
+│    (Single point of entry)          │
+└──────────────┬──────────────────────┘
+               │ context prop
+               ▼
+┌─────────────────────────────────────┐
+│  Context Provider (CompanyPickerCtx) │
+│  - Props Distribution Bus           │
+└──────────────┬──────────────────────┘
+               │ provides context
+               ▼
+┌─────────────────────────────────────┐
+│ Dumb Component (CompanyPickerView)   │
+│  - Pure Presentation                │
+│  - No Business Logic                │
+│                                     │
+│  Contains Child Components:         │
+│  ┌───────────────────────────────┐ │
+│  │ <Autocomplete />              │ │
+│  │   ↑ consumes autocomplete     │ │
+│  │     props from context        │ │
+│  └───────────────────────────────┘ │
+│  ┌───────────────────────────────┐ │
+│  │ <List />                      │ │
+│  │   ↑ consumes selectedList     │ │
+│  │     props from context        │ │
+│  └───────────────────────────────┘ │
+│  ┌───────────────────────────────┐ │
+│  │ <Footer />                    │ │
+│  │   ↑ consumes footer           │ │
+│  │     props from context        │ │
+│  └───────────────────────────────┘ │
+└─────────────────────────────────────┘
+```
+
+
+```tsx
+
+
+/* ======================================================
+    CompanyPickerView context (prop-bus)
+   ====================================================== */
+type CompanyPickerContext = {
+  autocomplete: AutocompleteProps;
+  selectedList: SelectedListProps;
+  footer: FooterProps;
 };
 
-GetOverviewQuery
-export type GetOverviewQuery = {
-  overview: {
-    totalTodos: number;
-    completedTodos: number;
-    pendingTodos: number;
-    __typename: "OverviewStats";
-    extra?: {
-      lastUpdated?: string;
-    } | null;
-  };
-};
-```
----------------------------------------------------------
-✅ 2. Mock Data Builders (ts-auto-mock + deep merge)
----------------------------------------------------------
-🔵 buildGetTodosData.ts
-```
-// tests/factories/buildGetTodosData.ts
-import { createMock } from "ts-auto-mock";
-import merge from "lodash.merge";
-import type { GetTodosQuery } from "../__generated__/graphql";
+const CompanyPickerCtx = React.createContext<CompanyPickerContext | null>(null);
 
-export const buildGetTodosData = (
-  overrides: Partial<GetTodosQuery> = {}
-): GetTodosQuery => {
-  const base = createMock<GetTodosQuery>();
+/* ======================================================
+    CompanyPickerView - Single Point of entry
+   ====================================================== */
+function CompanyPickerView({ context }: { context: CompanyPickerContext }) {
+  return (
+    <CompanyPickerCtx.Provider value={context}>
+      {/* Child components consume context to avoid prop drilling */}
+      <div>
+        <Autocomplete />
+        <List />
+        <Footer />
+      </div>
+    </CompanyPickerCtx.Provider>
+  );
+}
 
-  const defaults: GetTodosQuery = merge({}, base, {
-    todos: [
-      {
-        id: "todo-1",
-        title: "Buy milk",
-        completed: false,
-        __typename: "Todo",
-        metadata: {
-          priority: "medium",
-          tags: ["groceries"],
-        },
-      },
-      {
-        id: "todo-2",
-        title: "Write tests",
-        completed: true,
-        __typename: "Todo",
-        metadata: {
-          priority: "high",
-          tags: ["work"],
-        },
-      },
-    ],
-  });
 
-  return merge({}, defaults, overrides);
-};
+/* ======================================================
+   7) Smart Component wires everything
+   ====================================================== */
+export function CompanyPicker() {
+  const state = useCompanyPickerState(); //Shared States
 
-🔵 buildGetOverviewData.ts
-// tests/factories/buildGetOverviewData.ts
-import { createMock } from "ts-auto-mock";
-import merge from "lodash.merge";
-import type { GetOverviewQuery } from "../__generated__/graphql";
+  // Child specific hooks
+  const autocomplete = useAutocomplete(state, suggestions, loading);
+  const selectedList = useSelectedList(state);
+  const footer = useFooter(state);
 
-export const buildGetOverviewData = (
-  overrides: Partial<GetOverviewQuery> = {}
-): GetOverviewQuery => {
-  const base = createMock<GetOverviewQuery>();
-
-  const defaults: GetOverviewQuery = merge({}, base, {
-    overview: {
-      totalTodos: 2,
-      completedTodos: 1,
-      pendingTodos: 1,
-      __typename: "OverviewStats",
-      extra: {
-        lastUpdated: "2025-01-01T12:00:00Z",
-      },
-    },
-  });
-
-  return merge({}, defaults, overrides);
-};
-```
----------------------------------------------------------
-✅ 3. Example Test Usage
----------------------------------------------------------
-✔ Todos Test
-```
-// tests/Todos.test.tsx
-import { vi } from "vitest";
-import { render, screen } from "@testing-library/react";
-import { buildGetTodosData } from "./factories/buildGetTodosData";
-
-const useGetTodosQueryMock = vi.fn();
-
-vi.mock("../__generated__/graphql", () => ({
-  useGetTodosQuery: useGetTodosQueryMock,
-}));
-
-import { Todos } from "../Todos";
-
-test("renders default todos", () => {
-  useGetTodosQueryMock.mockReturnValue({
-    data: buildGetTodosData(),
-    loading: false,
-    error: undefined,
-  });
-
-  render(<Todos />);
-
-  expect(screen.getByText("Buy milk")).toBeInTheDocument();
-  expect(screen.getByText("Write tests")).toBeInTheDocument();
-});
-
-test("overrides nested todo metadata", () => {
-  useGetTodosQueryMock.mockReturnValue({
-    data: buildGetTodosData({
-      todos: [
-        {
-          id: "999",
-          title: "Urgent Task",
-          completed: false,
-          metadata: { priority: "high" },
-        },
-      ],
+// Memoize context to prevent unnecessary re-renders of CompanyPickerView
+  const context = React.useMemo<CompanyPickerContext>(
+    () => ({
+      autocomplete,
+      selectedList,
+      footer,
     }),
-    loading: false,
-    error: undefined,
-  });
+    [autocomplete, selectedList, footer]
+  );
 
-  render(<Todos />);
+  return <CompanyPickerView context={context} />;
+}
 
-  expect(screen.getByText("Urgent Task")).toBeInTheDocument();
-});
 
-✔ Overview Test
-// tests/Overview.test.tsx
-import { vi } from "vitest";
-import { render, screen } from "@testing-library/react";
-import { buildGetOverviewData } from "./factories/buildGetOverviewData";
-
-const useGetOverviewQueryMock = vi.fn();
-
-vi.mock("../__generated__/graphql", () => ({
-  useGetOverviewQuery: useGetOverviewQueryMock,
-}));
-
-import { Overview } from "../Overview";
-
-test("renders default overview stats", () => {
-  useGetOverviewQueryMock.mockReturnValue({
-    data: buildGetOverviewData(),
-    loading: false,
-    error: undefined,
-  });
-
-  render(<Overview />);
-
-  expect(screen.getByText(/2 total/i)).toBeInTheDocument();
-});
-
-test("overrides nested overview fields", () => {
-  useGetOverviewQueryMock.mockReturnValue({
-    data: buildGetOverviewData({
-      overview: {
-        totalTodos: 10,
-        completedTodos: 7,
-        pendingTodos: 3,
-        extra: {
-          lastUpdated: "2025-11-27",
-        },
-      },
-    }),
-    loading: false,
-    error: undefined,
-  });
-
-  render(<Overview />);
-
-  expect(screen.getByText(/10 total/i)).toBeInTheDocument();
-});
 ```
----------------------------------------------------------
-✅ 4. RFC Bullet Points (Why We Do This)
----------------------------------------------------------
-
-These are ready to paste directly into your RFC.
-
-Why This Mocking Strategy Works Well
-
-Mocking of generated hooks stays local to each test file, keeping setup explicit and easy to understand.
-
-Data builders generate full GraphQL results using ts-auto-mock, ensuring that the mock data always remains fully typed and structurally complete.
-
-Deep merge allows us to override only the fields we care about, while the rest of the GraphQL result is auto-filled or retained from defaults.
-
-Meaningful default values keep our component tests readable, requiring minimal overrides for common UI scenarios.
-
-As the schema grows, newly added nested fields are automatically included by ts-auto-mock, requiring no modifications to existing tests.
-
-Tests remain small and expressive, focusing on behavior rather than maintaining bulky mock objects.
-
-This pattern scales with complexity while staying simple to use for everyday testing needs.
